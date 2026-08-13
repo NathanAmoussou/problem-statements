@@ -56,7 +56,7 @@ consistent with the comment at the beggining of the markdown file -->
 
 The Quadratic Assignment Problem (QAP) is a classic combinatorial optimisation problem in which $n$ facilities must be assigned to $n$ locations, with exactly one facility per location. A flow is defined between each pair of facilities, and a distance between each pair of locations. <!-- The objective is to find an assignment that minimises the overall quadratic cost obtained by combining these flows and distances. -->
 
-The problem was introduced by Koopmans and Beckmann in 1957 [1], who notably studied the placement of industrial plants with inter-plant transportation costs. Since then, it has been used to formulate a wide range of practical problems, particularly in facility layout and logistics, such as arranging hospital departments to reduce transportation and communication costs [2]. Despite its simple formulation, the QAP was shown to be NP-hard by Sahni and Gonzalez [3] and is regarded as one of the most difficult combinatorial optimisation problems [4], which has made it the subject of extensive research.
+The problem was introduced by Koopmans and Beckmann in 1957 [1], who notably studied the placement of industrial plants with inter-plant transportation costs. Since then, it has been used to formulate a wide range of practical problems, particularly in facility layout and logistics, such as arranging hospital departments to reduce the distance travelled by patients [2]. Despite its simple formulation, the QAP was shown to be NP-hard by Sahni and Gonzalez [3] and is regarded as one of the most difficult combinatorial optimisation problems [4], which has made it the subject of extensive research.
 
 ## Task
 
@@ -78,7 +78,25 @@ Note that the general Koopmans-Beckmann formulation [1] also includes a linear t
 
 ## Instance data file
 
-Describe the format of a problem instance file.
+The first line of the instance file contains a positive integer $n$, denoting the number of facilities and locations. It is followed by $n$ lines containing the flow matrix $F$, with $n$ integer values per line, and then by $n$ lines containing the distance matrix $D$, also with $n$ integer values per line. Values are separated by whitespace, and blank lines may be used for readability without carrying any semantic meaning.
+
+The expected format is:
+
+```text
+n
+
+f11 f12 ... f1n
+f21 f22 ... f2n
+... ... ... ...
+fn1 fn2 ... fnn
+
+d11 d12 ... d1n
+d21 d22 ... d2n
+... ... ... ...
+dn1 dn2 ... dnn
+```
+
+This is the format used by QAPLIB [5].
 
 ## Solution file
 
@@ -118,3 +136,5 @@ relevant. -->
 [3] S. Sahni and T. Gonzalez. "P-Complete Approximation Problems." Journal of the ACM, 23(3):555-565, 1976. [10.1145/321958.321975](https://doi.org/10.1145/321958.321975)
 
 [4] E. M. Loiola, N. M. M. de Abreu, et al. "A Survey for the Quadratic Assignment Problem." European Journal of Operational Research, 176(2):657-690, 2007. [10.1016/j.ejor.2005.09.032](https://doi.org/10.1016/j.ejor.2005.09.032)
+
+[5] R. E. Burkard, S. E. Karisch, et al. "QAPLIB — A Quadratic Assignment Problem Library." Journal of Global Optimization, 10(4):391–403, 1997. https://doi.org/10.1023/A:1008293323270
