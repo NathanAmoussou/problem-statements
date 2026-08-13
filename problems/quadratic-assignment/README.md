@@ -96,27 +96,61 @@ d21 d22 ... d2n
 dn1 dn2 ... dnn
 ```
 
-This is the format used by QAPLIB [5].
+<!-- This is the format used by QAPLIB [5]. -->
 
 ## Solution file
 
-Describe the format of a solution file.
+The first line of the solution file contains the problem size $n$ and the objective value of the solution, separated by whitespace. It is followed by $n$ integer values forming a permutation of $\lbrace1,\ldots,n\rbrace$ (so each location is used exactly once), where the $i$-th value is $\pi(i)$, the location assigned to facility $i$.
+
+The expected format is:
+
+```text
+n objective_value
+pi(1) pi(2) ... pi(n)
+```
 
 ## Example
 
 ### Instance
 
-Provide a small example instance in the described format.
+The following instance file describes a QAP instance with three facilities and three locations, with the flow matrix $F$ followed by the distance matrix $D$, neither of which is symmetric:
+
+```text
+3
+
+0 3 1
+2 0 1
+3 1 0
+
+0 1 3
+3 0 1
+3 2 0
+```
 
 ### Solution
 
-Provide a feasible solution to the example instance in the described format
-(including its evaluation measure).
+A feasible solution, which happens to be optimal for this instance, is:
+
+```text
+3 19
+2 3 1
+```
+
+This corresponds to the permutation $\pi=(2,3,1)$, with objective value $19$.
 
 ### Explanation
 
-Optionally, provide a descriptive and/or visual explanation of the solution (and
-its evaluation measure value) for the instance.
+The permutation assigns facility $1$ to location $2$, facility $2$ to location $3$, and facility $3$ to location $1$. Its objective value is
+
+$$
+\begin{aligned}
+& f_{12}d_{23} + f_{13}d_{21} + f_{21}d_{32} + f_{23}d_{31} + f_{31}d_{12} + f_{32}d_{13} \\
+&= 3\cdot 1 + 1\cdot 3 + 2\cdot 2 + 1\cdot 3 + 3\cdot 1 + 1\cdot 3 \\
+&= 19.
+\end{aligned}
+$$
+
+The diagonal terms are zero and therefore do not contribute to the objective value.
 
 ## Acknowledgements
 
