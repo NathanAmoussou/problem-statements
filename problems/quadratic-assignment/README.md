@@ -40,7 +40,7 @@ Note that the general Koopmans-Beckmann formulation [1] also includes a linear t
 
 ## Instance data file
 
-The instance file begins with a positive integer $n$, denoting the number of facilities and locations. It is followed by the $n^2$ integer entries of the flow matrix $F$ in row-major order, and then the $n^2$ integer entries of the distance matrix $D$, also in row-major order. Values are separated by whitespace, and the placement of line breaks is not significant.
+The instance file begins with a positive integer $n$, denoting the number of facilities and locations. It is followed by the $n^2$ non-negative integer entries of the flow matrix $F$ in row-major order, and then the $n^2$ non-negative integer entries of the distance matrix $D$, also in row-major order. Values are separated by whitespace, and the placement of line breaks is not significant.
 
 Instances are usually laid out with one line per matrix row:
 
@@ -58,7 +58,7 @@ d21 d22 ... d2n
 dn1 dn2 ... dnn
 ```
 
-An instance file is invalid if it does not contain exactly $2n^2$ matrix entries after $n$.
+An instance file is invalid if it does not contain exactly $2n^2$ matrix entries after $n$, or if any of these entries is negative.
 
 ## Solution file
 

@@ -1,1 +1,2 @@
-an output for this instance
+8 1298
+1 7 2 3 4 8 5 6

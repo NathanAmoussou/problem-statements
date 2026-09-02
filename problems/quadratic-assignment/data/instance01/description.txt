@@ -1,1 +1,5 @@
-A description of this instance if justified.
+This instance corresponds to the QAP example from the problem statement (`quadratic-assignment/README.md`).
+It was handmade and contains 3 facilities and 3 locations.
+The first matrix defines the flow between facilities, while the second matrix defines the distance between locations.
+
+One feasible solution, which happens to be optimal for this instance, is defined in `output.txt`.

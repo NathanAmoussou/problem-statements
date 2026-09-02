@@ -1,0 +1,5 @@
+This instance corresponds to a QAP of size 8 (8 facilities and 8 locations), with non-zero diagonals in both matrices.
+It was generated with `quadratic-assignment/support/generator.py`, using the parameters `8 --seed 42 --flow-range 1 9 --distance-range 1 9`.
+The first matrix defines the flow between facilities, while the second matrix defines the distance between locations.
+
+One feasible solution, which happens to be optimal for this instance, is defined in `output.txt`.
