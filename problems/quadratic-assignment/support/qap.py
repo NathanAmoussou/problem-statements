@@ -82,12 +82,24 @@ def unordered_pair(x: int) -> tuple[int, int]:
 
 @final
 class Solution(SupportsCopySolution, SupportsObjectiveValue):
-    def __init__(self, problem: Problem, permutation: list[int], objective: int):
+    def __init__(
+        self,
+        problem: Problem,
+        permutation: list[int],
+        objective: int,
+        deltas: list[list[int]] | None,
+    ):
         self.problem = problem
         # permutation[i] is the location assigned to facility i, from 0
         self.permutation = permutation
-        # Kept up to date by apply_move, never recomputed
         self.objective = objective
+        # Taillard delta matrix
+        # e.g.:
+        # [[],
+        # [Δ01],
+        # [Δ02, Δ12],
+        # [Δ03, Δ13, Δ23]]
+        self.deltas = deltas
 
     def __str__(self) -> str:
         return " ".join(str(location + 1) for location in self.permutation)
@@ -100,13 +112,19 @@ class Solution(SupportsCopySolution, SupportsObjectiveValue):
         f.write(f"{self.problem.n} {self.objective}\n{self}\n")
 
     def copy_solution(self) -> Self:
-        return self.__class__(self.problem, self.permutation.copy(), self.objective)
+        # For GA potentially lot of copies, will have to look for techniques to speed up
+        deltas = None if self.deltas is None else [row.copy() for row in self.deltas]
+        return self.__class__(
+            self.problem, self.permutation.copy(), self.objective, deltas
+        )
 
     def objective_value(self) -> int:
         """
         Return the objective value of the solution, which is held rather than
         computed. Every permutation is feasible, so it is never undefined.
         """
+        # python -O to drop the assertion
+        assert self.objective == self.problem._evaluate(self.permutation)
         return self.objective
 
 
@@ -119,31 +137,25 @@ class SwapMove(
     SupportsObjectiveValueIncrement[Solution],
 ):
     def __init__(self, neighbourhood: SwapNeighbourhood, r: int, s: int):
-        # The neighbourhood that created the move is not used here, since the
-        # instance data is reached through the solution, but it is kept for
-        # consistency with the other models and because a move that has to
-        # build another one, such as its inverse, needs one to pass on.
         self.neighbourhood = neighbourhood
-        # r and s are facilities, whose locations are to be exchanged
         self.r = r
         self.s = s
 
     def __str__(self) -> str:
         return f"Move: exchange the locations of facilities {self.r} and {self.s}"
 
-    def objective_value_increment(self, solution: Solution) -> int:
+    @staticmethod
+    def _burkard_delta(
+        problem: Problem, permutation: Sequence[int], r: int, s: int
+    ) -> int:
         """
-        Return the variation of the objective value that applying the move
-        would cause, without modifying the solution.
-
-        Exchanging the locations of two facilities leaves every other pi(k)
-        unchanged, so only the terms of the objective function whose row or
-        column is r or s are affected. There are O(n) of them, against the
-        O(n^2) terms of a full evaluation.
+        Return the objective value delta caused by swapping locations of
+        facilities r and s in the permutation, using Burkard and Rendl 1984
+        O(n) formula. Valid for any matrices, symmetric or not, with any
+        diagonals. DOI: 10.1016/0377-2217(84)90231-5
         """
-        problem = solution.problem
         f, d, n = problem.flow, problem.distance, problem.n
-        pi, r, s = solution.permutation, self.r, self.s
+        pi = permutation
         a, b = pi[r], pi[s]
 
         increment = 0
@@ -154,27 +166,90 @@ class SwapMove(
             increment += f[r][k] * (d[b][c] - d[a][c]) + f[k][r] * (d[c][b] - d[c][a])
             increment += f[s][k] * (d[a][c] - d[b][c]) + f[k][s] * (d[c][a] - d[c][b])
 
-        # The four terms that involve r and s only, and no other facility.
-        # The first two are the diagonal ones, which vanish when the diagonals
-        # of both matrices are zero, and the last two are those of the pair
-        # being exchanged.
         increment += f[r][r] * (d[b][b] - d[a][a]) + f[s][s] * (d[a][a] - d[b][b])
         increment += f[r][s] * (d[b][a] - d[a][b]) + f[s][r] * (d[a][b] - d[b][a])
         return increment
 
+    @staticmethod
+    def _taillard_delta(
+        problem: Problem,
+        permutation: Sequence[int],
+        delta: int,
+        u: int,
+        v: int,
+        r: int,
+        s: int,
+    ) -> int:
+        """
+        Return the delta of exchanging locations of facilities u and v after
+        those of r and s have just been exchanged, given the delta it
+        had before, using Taillard 1995 O(1) formula. The {u, v} and {r, s}
+        pairs must be disjoint, else Burkard and Rendl 1984 O(n) formula is
+        used. DOI: 10.1016/0966-8349(95)00008-6
+
+        """
+        f, d = problem.flow, problem.distance
+        pi = permutation
+        pr, ps, pu, pv = pi[r], pi[s], pi[u], pi[v]
+        return (
+            delta
+            + (f[r][u] - f[r][v] + f[s][v] - f[s][u])
+            * (d[ps][pu] - d[ps][pv] + d[pr][pv] - d[pr][pu])
+            + (f[u][r] - f[v][r] + f[v][s] - f[u][s])
+            * (d[pu][ps] - d[pv][ps] + d[pv][pr] - d[pu][pr])
+        )
+
+    def _update_deltas(self, solution: Solution, delta: int) -> None:
+        """
+        Updates Taillard 1995's approach delta matrix after the move has been
+        applied, `delta` being the value the move had before. Called by
+        `apply_move` once the locations have been exchanged, so every
+        formula below reads the new permutation. Three cases, O(n^2) in all:
+          - the O(n^2) pairs disjoint from {r, s}, almost all of them:
+            `_taillard_delta` from their previous value, O(1) each
+          - the 2(n-2) in O(n) pairs sharing one facility with (r, s):
+            `_burkard_delta` from the instance data, O(n) each
+          - (r, s) itself: exchanging back undoes the move, so its delta is
+            the opposite of what it was, and it is skipped by the loop.
+        """
+        problem, pi, deltas = solution.problem, solution.permutation, solution.deltas
+        assert deltas is not None
+        r, s = self.r, self.s
+        for v in range(problem.n):
+            row = deltas[v]
+            for u in range(v):
+                if u == r or u == s or v == r or v == s:
+                    if u == r and v == s:
+                        continue
+                    row[u] = self._burkard_delta(problem, pi, u, v)
+                else:
+                    row[u] = self._taillard_delta(problem, pi, row[u], u, v, r, s)
+        deltas[s][r] = -delta
+
+    def objective_value_increment(self, solution: Solution) -> int:
+        """
+        Return the delta of the objective value that applying the move would
+        cause, without modifying the solution. A O(1) lookup when the solution
+        carries its delta table and the O(n) formula otherwise.
+        """
+        if solution.deltas is None:
+            return self._burkard_delta(
+                solution.problem, solution.permutation, self.r, self.s
+            )
+        return solution.deltas[self.s][self.r]
+
     def apply_move(self, solution: Solution) -> Solution:
         """
         Exchange the locations of the two facilities in place, and update the
-        objective value held by the solution.
-
-        The increment is computed before the exchange, since it is expressed
-        in terms of the current permutation, and it is obtained from
-        objective_value_increment rather than recomputed here, so that the two
-        cannot disagree.
+        objective value held by the solution, and its delta table if it has
+        one.
         """
-        solution.objective += self.objective_value_increment(solution)
+        delta = self.objective_value_increment(solution)
+        solution.objective += delta
         pi, r, s = solution.permutation, self.r, self.s
         pi[r], pi[s] = pi[s], pi[r]
+        if solution.deltas is not None:
+            self._update_deltas(solution, delta)
         return solution
 
 
@@ -190,10 +265,6 @@ class SwapNeighbourhood(
     """
     The neighbourhood in which the neighbours of a solution are the
     permutations obtained by exchanging the locations of two facilities.
-
-    A solution of size n has n(n-1)/2 neighbours. This neighbourhood induces
-    the Cayley distance on permutations, that is, the least number of
-    transpositions needed to turn one into the other.
     """
 
     def __init__(self, problem: Problem):
@@ -248,18 +319,23 @@ class Problem(
         flow: Sequence[Sequence[int]],
         distance: Sequence[Sequence[int]],
         name: str = "unnamed",
+        fast_evaluation: bool = True,
     ):
         self.flow = tuple(tuple(row) for row in flow)
         self.distance = tuple(tuple(row) for row in distance)
         self.name = name
         self.n = len(self.flow)
+        # Whether solutions carry a table of the deltas of every exchange,
+        # maintained after each move so that an increment is a lookup rather
+        # than an O(n) computation. Off, deltas are computed on request.
+        self.fast_evaluation = fast_evaluation
         self.l_nbhood: SwapNeighbourhood | None = None
 
     def __str__(self) -> str:
         rows = lambda matrix: "\n".join(" ".join(map(str, row)) for row in matrix)
         return f"{self.n}\n\n{rows(self.flow)}\n\n{rows(self.distance)}"
 
-    def evaluate(self, permutation: Sequence[int]) -> int:
+    def _evaluate(self, permutation: Sequence[int]) -> int:
         """
         Return the objective value of a permutation, computed from scratch.
 
@@ -274,15 +350,25 @@ class Problem(
             for j in range(n)
         )
 
+    def _delta_matrix(self, permutation: Sequence[int]) -> list[list[int]]:
+        """
+        Return the objective value deltas of every swap, computed from
+        scratch, as a triangular table whose entry [s][r], for r < s, is the
+        increment of exchanging the locations of facilities r and s.
+
+        This is O(n^3), n(n-1)/2 deltas of O(n) each, and is only done
+        when a solution is createds.
+        """
+        return [
+            [SwapMove._burkard_delta(self, permutation, r, s) for r in range(s)]
+            for s in range(self.n)
+        ]
+
     def local_neighbourhood(self) -> SwapNeighbourhood:
         """
         Return the neighbourhood in which two solutions are neighbours when
         one is obtained from the other by swapping the locations of two
         facilities.
-
-        The neighbourhood defines how to move. It holds no state of its own and
-        is built on first request, so that all the algorithms run on a problem
-        share a single instance of it.
         """
         if self.l_nbhood is None:
             self.l_nbhood = SwapNeighbourhood(self)
@@ -293,13 +379,15 @@ class Problem(
         Return a solution drawn uniformly at random, to be used as a starting
         point. Every permutation is feasible, so shuffling is enough.
 
-        This is the only place where the objective value is computed from
-        scratch, since the solution it returns has no predecessor to derive it
-        from.
+        This is the only place where the objective value, and the increment
+        table when fast_evaluation is set, are computed from scratch, since the
+        solution it returns has no predecessor to derive them from.
         """
-        permutation = list(range(self.n))
-        random.shuffle(permutation)
-        return Solution(self, permutation, self.evaluate(permutation))
+        permutation = random.sample(range(self.n), self.n)
+        # permutation = list(range(self.n))
+        # random.shuffle(permutation)
+        deltas = self._delta_matrix(permutation) if self.fast_evaluation else None
+        return Solution(self, permutation, self._evaluate(permutation), deltas)
 
     @classmethod
     def from_textio(cls, f: TextIO, name: str = "unnamed") -> Self:

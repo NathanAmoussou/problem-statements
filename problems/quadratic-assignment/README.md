@@ -10,7 +10,7 @@ SPDX-License-Identifier: CC-BY-4.0
 Nathan Amoussou, Université Côte d'Azur, CNRS, I3S, France  
 Denis Pallez, Université Côte d'Azur, CNRS, I3S, France
 
-Copyright 2026 Nathan Amoussou and Denis Pallez.
+Copyright 2026 Nathan Amoussou and Denis Pallez
 
 This document is licensed under CC-BY-4.0.
 
@@ -123,7 +123,7 @@ A large collection of QAP instances, together with best-known or optimal solutio
 ## Acknowledgements
 
 This problem statement is based upon work from COST Action Randomised
-Optimisation Algorithms Research Network (ROAR-NET), CA22137, is supported by
+Optimisation Algorithms Research Network (ROAR-NET), CA22137, supported by
 COST (European Cooperation in Science and Technology).
 
 ## References
