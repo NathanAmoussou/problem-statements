@@ -20,6 +20,10 @@ which is to be minimised. Every permutation is feasible.
 Permutations are represented as lists of locations indexed by facility, and
 both facilities and locations are numbered from 0 here, whereas the instance
 and solution file formats number locations from 1.
+
+Two neighbourhoods are provided: the swap of the locations of two facilities,
+as the local neighbourhood, and the cyclic shift of every location, as the
+perturbation neighbourhood (for Marrouche AE).
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from roar_net_api.operations import (
     SupportsMoves,
     SupportsObjectiveValue,
     SupportsObjectiveValueIncrement,
+    SupportsPerturbationNeighbourhood,
     SupportsRandomMove,
     SupportsRandomMovesWithoutReplacement,
     SupportsRandomSolution,
@@ -218,6 +223,8 @@ class SwapMove(
         for v in range(problem.n):
             row = deltas[v]
             for u in range(v):
+                # if u == r and v == s:
+                #     continue
                 if u == r or u == s or v == r or v == s:
                     if u == r and v == s:
                         continue
@@ -250,6 +257,62 @@ class SwapMove(
         pi[r], pi[s] = pi[s], pi[r]
         if solution.deltas is not None:
             self._update_deltas(solution, delta)
+        return solution
+
+
+@final
+class RollMove(
+    SupportsApplyMove[Solution],
+    SupportsObjectiveValueIncrement[Solution],
+):
+    """
+    Shift the location of every facility by k places, cyclically: facility i
+    moves from location pi(i) to (pi(i) + k) mod n, for k in 1, ..., n-1.
+
+    This rotates the values of the permutation, not its positions. On the
+    inverse representation (list of facilities indexed by location), it is a
+    roll of the list by k places to the right, which is the perturbation of
+    Marrouche 2025. Rolling by k to the left is rolling by n-k to the right, so
+    this single convention covers every shift, and k = 0, the identity, is
+    excluded. DOI: 10.1007/s12065-025-01100-3
+
+    This implementation re-evaluates the objective value in full, in O(n^2),
+    and rebuilds the delta table, when the solution carries one, in O(n^3).
+    """
+
+    def __init__(self, neighbourhood: RollNeighbourhood, k: int):
+        self.neighbourhood = neighbourhood
+        self.k = k
+
+    def __str__(self) -> str:
+        return f"Move: shift the location of every facility by {self.k} places"
+
+    def _rolled(self, solution: Solution) -> list[int]:
+        """Return the permutation the move leads to, in O(n)."""
+        n, k = solution.problem.n, self.k
+        return [(location + k) % n for location in solution.permutation]
+
+    def objective_value_increment(self, solution: Solution) -> int:
+        """
+        Return the delta of the objective value that applying the move would
+        cause, without modifying the solution. An O(n^2) evaluation of the
+        rolled permutation, so that a move can be accepted or rejected
+        without copying nor applying anything.
+        """
+        rolled = self._rolled(solution)
+        return solution.problem._evaluate(rolled) - solution.objective
+
+    def apply_move(self, solution: Solution) -> Solution:
+        """
+        Shift every location in place, and recompute the objective value held
+        by the solution, and its delta table if it has one, from scratch.
+        """
+        problem = solution.problem
+        rolled = self._rolled(solution)
+        solution.permutation[:] = rolled  # In-place for good practice
+        solution.objective = problem._evaluate(rolled)
+        if solution.deltas is not None:
+            solution.deltas = problem._delta_matrix(rolled)
         return solution
 
 
@@ -306,12 +369,59 @@ class SwapNeighbourhood(
         return SwapMove(self, r, s)
 
 
+@final
+class RollNeighbourhood(
+    SupportsMoves[Solution, RollMove],
+    SupportsRandomMovesWithoutReplacement[Solution, RollMove],
+    SupportsRandomMove[Solution, RollMove],
+):
+    """
+    The perturbation neighbourhood, in which the n-1 neighbours of a solution
+    are the permutations obtained by shifting the location of every facility
+    by the same number k of places, cyclically, for k in 1, ..., n-1.
+    """
+
+    def __init__(self, problem: Problem):
+        self.problem = problem
+
+    def moves(self, solution: Solution) -> Iterable[RollMove]:
+        """Yield every move of the neighbourhood, in a fixed order."""
+        assert self.problem is solution.problem
+        for k in range(1, self.problem.n):
+            yield RollMove(self, k)
+
+    def random_moves_without_replacement(
+        self, solution: Solution
+    ) -> Iterable[RollMove]:
+        """
+        Yield every move of the neighbourhood exactly once, in a uniformly
+        random order, one at a time.
+        """
+        assert self.problem is solution.problem
+        # Fisher-Yates on n-1 then +1 to remove the k == 0 trivial move
+        for x in sparse_fisher_yates_iter(self.problem.n - 1):
+            yield RollMove(self, x + 1)
+
+    def random_move(self, solution: Solution) -> RollMove | None:
+        """
+        Return a move drawn uniformly at random among the n-1 non-zero
+        shifts, or None when the problem is too small for the neighbourhood
+        to contain any.
+        """
+        assert self.problem is solution.problem
+        n = self.problem.n
+        if n < 2:
+            return None
+        return RollMove(self, random.randrange(1, n))
+
+
 # --------------------------------- Problem ----------------------------------
 
 
 @final
 class Problem(
     SupportsLocalNeighbourhood[SwapNeighbourhood],
+    SupportsPerturbationNeighbourhood[RollNeighbourhood],
     SupportsRandomSolution[Solution],
 ):
     def __init__(
@@ -330,6 +440,7 @@ class Problem(
         # than an O(n) computation. Off, deltas are computed on request.
         self.fast_evaluation = fast_evaluation
         self.l_nbhood: SwapNeighbourhood | None = None
+        self.p_nbhood: RollNeighbourhood | None = None
 
     def __str__(self) -> str:
         rows = lambda matrix: "\n".join(" ".join(map(str, row)) for row in matrix)
@@ -357,7 +468,7 @@ class Problem(
         increment of exchanging the locations of facilities r and s.
 
         This is O(n^3), n(n-1)/2 deltas of O(n) each, and is only done
-        when a solution is createds.
+        when a solution is created or rolled.
         """
         return [
             [SwapMove._burkard_delta(self, permutation, r, s) for r in range(s)]
@@ -373,6 +484,16 @@ class Problem(
         if self.l_nbhood is None:
             self.l_nbhood = SwapNeighbourhood(self)
         return self.l_nbhood
+
+    def perturbation_neighbourhood(self) -> RollNeighbourhood:
+        """
+        Return the neighbourhood in which two solutions are neighbours when
+        one is obtained from the other by shifting the location of every
+        facility by the same number of places, cyclically.
+        """
+        if self.p_nbhood is None:
+            self.p_nbhood = RollNeighbourhood(self)
+        return self.p_nbhood
 
     def random_solution(self) -> Solution:
         """
