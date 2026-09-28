@@ -34,19 +34,25 @@ import random
 import sys
 from collections.abc import Iterable, Sequence
 from logging import getLogger
-from typing import Self, TextIO, final
+from typing import Literal, Self, TextIO, final
 
 from roar_net_api.operations import (
     SupportsApplyMove,
+    SupportsApplyMoveRightEnd,
     SupportsCopySolution,
     SupportsLocalNeighbourhood,
     SupportsMoves,
+    SupportsMovesRightEndCloser,
     SupportsObjectiveValue,
     SupportsObjectiveValueIncrement,
     SupportsPerturbationNeighbourhood,
     SupportsRandomMove,
+    SupportsRandomMoveRightEndCloser,
     SupportsRandomMovesWithoutReplacement,
     SupportsRandomSolution,
+    SupportsSegment,
+    SupportsSegmentLength,
+    SupportsSegmentLengthIncrementRightEnd,
 )
 
 log = getLogger(__name__)
@@ -80,6 +86,24 @@ def unordered_pair(x: int) -> tuple[int, int]:
     """
     s = (1 + math.isqrt(1 + 8 * x)) // 2
     return x - s * (s - 1) // 2, s
+
+
+def cycles(p: list[int]) -> list[list[int]]:
+    """
+    Return the cycles of the permutation p. O(n).
+    """
+    seen = len(p) * [False]
+    result = []
+    for r in range(len(p)):
+        cycle = []
+        i = r
+        while not seen[i]:
+            seen[i] = True
+            cycle.append(i)
+            i = p[i]
+        if cycle:
+            result.append(cycle)
+    return result
 
 
 # --------------------------------- Solution ---------------------------------
@@ -133,6 +157,106 @@ class Solution(SupportsCopySolution, SupportsObjectiveValue):
         return self.objective
 
 
+# --------------------------------- Segment ----------------------------------
+
+
+@final
+class HammingSegment(SupportsSegmentLength):
+    """
+    Segment under the Hamming distance, the number of facilities whose
+    locations differ between the two ends.
+    """
+
+    def __init__(
+        self,
+        neighbourhood: SwapNeighbourhood,
+        t0: list[int],
+        t1: list[int],
+        tt: list[int],
+        length: int,
+    ):
+        self.neighbourhood = neighbourhood
+        self.t0 = t0  # Left end permutation
+        self.t1 = t1  # Right end permutation
+        self.tt = tt
+        self.length = length
+
+    def segment_length(self) -> int:
+        # python -O to drop the assertion
+        assert self.length == sum(self.tt[i] != i for i in range(len(self.tt)))
+        return self.length
+
+    def _increment(self, r: int, s: int) -> int:
+        """Return the length increment of swapping r and s in the right end."""
+        t0, t1 = self.t0, self.t1
+        return (t1[s] != t0[r]) + (t1[r] != t0[s]) - (t1[r] != t0[r]) - (t1[s] != t0[s])
+
+    def _closer_pairs(self) -> Iterable[tuple[int, int]]:
+        """
+        Yield the pairs (r, s), r < s, whose swap brings the right end closer,
+        that is, puts at least one facility at its location in the left end.
+        """
+        tt = self.tt
+        for r in range(len(tt)):
+            s = tt[r]
+            # For second guard, consider e.g. tt = [1, 0, 2]. Without it, would
+            # generate ((0, 1), (0, 1)), duplicate.
+            if s != r and not (tt[s] == r and s < r):
+                yield min(r, s), max(r, s)
+
+
+@final
+class CayleySegment(SupportsSegmentLength):
+    """
+    Segment under the Cayley distance, the least number of swaps from one end
+    to the other, which is n minus the number of cycles of tt. A swap within a
+    cycle splits it, and brings the right end closer by 1; a swap across two
+    cycles merges them, and moves it away by 1.
+    """
+
+    def __init__(
+        self,
+        neighbourhood: SwapNeighbourhood,
+        t0: list[int],
+        t1: list[int],
+        tt: list[int],
+        length: int,
+    ):
+        self.neighbourhood = neighbourhood
+        self.t0 = t0  # Left end permutation
+        self.t1 = t1  # Right end permutation
+        self.tt = tt
+        self.length = length
+
+    def segment_length(self) -> int:
+        # python -O to drop the assertion
+        assert self.length == len(self.tt) - len(cycles(self.tt))
+        return self.length
+
+    def _increment(self, r: int, s: int) -> int:
+        """Return the length increment of swapping r and s in the right end.
+        O(n) worst case."""
+        tt = self.tt
+        i = tt[r]
+        while i != r:
+            if i == s:
+                return -1
+            i = tt[i]
+        return 1
+
+    def _closer_pairs(self) -> Iterable[tuple[int, int]]:
+        """Yield the pairs (r, s), r < s, within a same cycle of tt.
+        O(n^2) worst case."""
+        for cycle in cycles(self.tt):
+            for i in range(len(cycle)):
+                for j in range(i + 1, len(cycle)):
+                    r, s = cycle[i], cycle[j]
+                    yield min(r, s), max(r, s)
+
+
+Segment = HammingSegment | CayleySegment
+
+
 # ----------------------------------- Move -----------------------------------
 
 
@@ -140,6 +264,8 @@ class Solution(SupportsCopySolution, SupportsObjectiveValue):
 class SwapMove(
     SupportsApplyMove[Solution],
     SupportsObjectiveValueIncrement[Solution],
+    SupportsSegmentLengthIncrementRightEnd[Segment],
+    SupportsApplyMoveRightEnd[Segment],
 ):
     def __init__(self, neighbourhood: SwapNeighbourhood, r: int, s: int):
         self.neighbourhood = neighbourhood
@@ -259,6 +385,19 @@ class SwapMove(
             self._update_deltas(solution, delta)
         return solution
 
+    def segment_length_increment_right_end(self, segment: Segment) -> int:
+        assert self.neighbourhood.problem is segment.neighbourhood.problem
+        return segment._increment(self.r, self.s)
+
+    def apply_move_right_end(self, segment: Segment) -> Segment:
+        assert self.neighbourhood.problem is segment.neighbourhood.problem
+        r, s = self.r, self.s
+        segment.length += segment._increment(r, s)
+        tt, t1 = segment.tt, segment.t1
+        tt[r], tt[s] = tt[s], tt[r]
+        t1[r], t1[s] = t1[s], t1[r]
+        return segment
+
 
 @final
 class RollMove(
@@ -324,6 +463,9 @@ class SwapNeighbourhood(
     SupportsMoves[Solution, SwapMove],
     SupportsRandomMovesWithoutReplacement[Solution, SwapMove],
     SupportsRandomMove[Solution, SwapMove],
+    SupportsSegment[Solution, Segment],
+    SupportsMovesRightEndCloser[Segment, SwapMove],
+    SupportsRandomMoveRightEndCloser[Segment, SwapMove],
 ):
     """
     The neighbourhood in which the neighbours of a solution are the
@@ -367,6 +509,33 @@ class SwapNeighbourhood(
             return None
         r, s = unordered_pair(random.randrange(n * (n - 1) // 2))
         return SwapMove(self, r, s)
+
+    def segment(self, solution0: Solution, solution1: Solution) -> Segment:
+        assert self.problem is solution0.problem is solution1.problem
+        t0 = solution0.permutation
+        t1 = solution1.permutation
+        n = self.problem.n
+        # Facility of each location in t0
+        t0i = n * [0]
+        for i in range(n):
+            t0i[t0[i]] = i
+        # Relabelled right end
+        tt = [t0i[t1[i]] for i in range(n)]
+        if self.problem.metric == "hamming":
+            length = sum(tt[i] != i for i in range(n))
+            return HammingSegment(self, t0.copy(), t1.copy(), tt, length)
+        length = n - len(cycles(tt))
+        return CayleySegment(self, t0.copy(), t1.copy(), tt, length)
+
+    def moves_right_end_closer(self, segment: Segment) -> Iterable[SwapMove]:
+        assert self.problem is segment.neighbourhood.problem
+        # SwapMove expects r < s, as the delta table is indexed [s][r]
+        for r, s in segment._closer_pairs():
+            yield SwapMove(self, r, s)
+
+    def random_move_right_end_closer(self, segment: Segment) -> SwapMove | None:
+        moves = list(self.moves_right_end_closer(segment))
+        return random.choice(moves) if moves else None
 
 
 @final
@@ -430,7 +599,10 @@ class Problem(
         distance: Sequence[Sequence[int]],
         name: str = "unnamed",
         fast_evaluation: bool = True,
+        metric: Literal["hamming", "cayley"] = "hamming",
     ):
+        if metric not in ("hamming", "cayley"):
+            raise ValueError(f"metric must be 'hamming' or 'cayley', found {metric!r}")
         self.flow = tuple(tuple(row) for row in flow)
         self.distance = tuple(tuple(row) for row in distance)
         self.name = name
@@ -439,6 +611,7 @@ class Problem(
         # maintained after each move so that an increment is a lookup rather
         # than an O(n) computation. Off, deltas are computed on request.
         self.fast_evaluation = fast_evaluation
+        self.metric = metric
         self.l_nbhood: SwapNeighbourhood | None = None
         self.p_nbhood: RollNeighbourhood | None = None
 
